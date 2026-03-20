@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Web Server",
+    "address": "192.168.1.10",
+    "enabled": true
+  },
+  {
+    "name": "API Server",
+    "address": "192.168.1.11",
+    "enabled": true
+  }
+]

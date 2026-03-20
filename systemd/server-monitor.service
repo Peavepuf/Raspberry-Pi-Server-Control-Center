@@ -1,0 +1,16 @@
+[Unit]
+Description=Raspberry Pi Server Control Center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/raspberry-pi-server-control-center
+ExecStart=/opt/raspberry-pi-server-control-center/.venv/bin/python /opt/raspberry-pi-server-control-center/main.py --headless
+Restart=always
+RestartSec=10
+User=pi
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
