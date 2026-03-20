@@ -22,17 +22,17 @@ def _fmt_uptime(stats: UptimeStats) -> str:
     return f"{stats.percentage:.1f}% ({stats.successful}/{stats.total})"
 
 
-def _server_has_issue(server: dict[str, object]) -> bool:
-    if server["is_up"] is False:
-        return True
-    if server.get("http_ok") is False:
-        return True
-    ssl_days_left = server.get("ssl_days_left")
-    return isinstance(ssl_days_left, int) and ssl_days_left < 0
-
-
 def _title_emoji_from_servers(servers: list[dict[str, object]]) -> str:
-    return "🚨" if any(_server_has_issue(server) for server in servers) else "🛰️"
+    return "🚨" if any(_has_primary_issue(server) for server in servers) else "🛰️"
+
+
+def _http_short(server: dict[str, object]) -> str:
+    status = server.get("http_status_code")
+    if status is not None:
+        return str(status)
+    if server.get("http_error"):
+        return "ERR"
+    return "-"
 
 
 def _http_text(server: dict[str, object], lang: str) -> str:
@@ -66,40 +66,75 @@ def _ssl_text(server: dict[str, object], lang: str) -> str:
     return tr(lang, "not_applicable")
 
 
+def _has_primary_issue(server: dict[str, object]) -> bool:
+    return server["is_up"] is False or server.get("http_ok") is False or _has_ssl_issue(server)
+
+
+def _has_ssl_issue(server: dict[str, object]) -> bool:
+    days_left = server.get("ssl_days_left")
+    return isinstance(days_left, int) and days_left <= 7
+
+
+def _issue_summary(server: dict[str, object], lang: str) -> str:
+    issues: list[str] = []
+
+    if server["is_up"] is False:
+        issues.append(tr(lang, "offline"))
+
+    if server.get("http_ok") is False:
+        status = server.get("http_status_code")
+        issues.append(f"HTTP {_http_short(server)}" if status is not None else "HTTP ERR")
+
+    days_left = server.get("ssl_days_left")
+    if isinstance(days_left, int):
+        if days_left < 0:
+            issues.append(tr(lang, "expired_short"))
+        elif days_left <= 7:
+            issues.append(f"SSL {days_left}d")
+
+    if not issues:
+        latency = server.get("latency_ms")
+        latency_text = f"{latency} ms" if latency is not None else "-"
+        return f"{_status_text(server['is_up'], lang)} | HTTP {_http_short(server)} | {latency_text}"
+
+    return " | ".join(issues)
+
+
 def build_hourly_summary(report: dict[str, object], title: str | None = None, lang: str = "en") -> str:
     servers = list(report["servers"])
     lines = [f"{_title_emoji_from_servers(servers)} {title or tr(lang, 'hourly_report_title')}"]
+
     if not servers:
         lines.append(tr(lang, "no_servers_configured"))
+        return "\n".join(lines)
 
-    for server in servers:
-        latency = server["latency_ms"]
-        latency_text = f"{latency} ms" if latency is not None else "-"
-        block = [
-            f"{_status_emoji(server['is_up'])} {server['name']} ({server['address']})",
-            f"  {tr(lang, 'status_line', value=_status_text(server['is_up'], lang))}",
-            f"  {tr(lang, 'latency_line', value=latency_text)}",
-            f"  {tr(lang, 'http_line', value=_http_text(server, lang))}",
-            f"  {tr(lang, 'ssl_line', value=_ssl_text(server, lang))}",
-            f"  {tr(lang, 'uptime_24h_line', value=_fmt_uptime(server['uptime_24h']))}",
-            f"  {tr(lang, 'uptime_7d_line', value=_fmt_uptime(server['uptime_7d']))}",
-            f"  {tr(lang, 'overall_uptime_report_line', value=_fmt_uptime(server['uptime_all']))}",
-            f"  {tr(lang, 'failures_24h_line', value=server['failures_24h'])}",
-        ]
-        if server.get("error"):
-            block.append(f"  {tr(lang, 'ping_error_line', value=server['error'])}")
-        if server.get("http_error") and server.get("http_status_code") is None:
-            block.append(f"  {tr(lang, 'http_detail_line', value=server['http_error'])}")
-        if server.get("ssl_error") and server.get("ssl_days_left") is None:
-            block.append(f"  {tr(lang, 'ssl_detail_line', value=server['ssl_error'])}")
-        lines.append("\n".join(block))
+    total = len(servers)
+    online = sum(1 for server in servers if server["is_up"] is True)
+    offline = sum(1 for server in servers if server["is_up"] is False)
+    http_issues = sum(1 for server in servers if server.get("http_ok") is False)
+    ssl_issues = sum(1 for server in servers if _has_ssl_issue(server))
+    issue_servers = [server for server in servers if _has_primary_issue(server)]
 
-    lines.append("")
-    lines.append(tr(lang, "overall_24h_uptime", value=report["overall_24h"].percentage))
-    lines.append(tr(lang, "overall_7d_uptime", value=report["overall_7d"].percentage))
-    lines.append(tr(lang, "overall_uptime_line", value=report["overall_all"].percentage))
-    lines.append(tr(lang, "total_24h_failures", value=report["failures_total_24h"]))
-    lines.append(tr(lang, "total_7d_failures", value=report["failures_total_7d"]))
+    if lang == "tr":
+        lines.append(f"{'✅' if not issue_servers else '⚠️'} Toplam {total} hedef | Çevrimiçi: {online} | Sorunlu: {len(issue_servers)}")
+        lines.append(f"📊 Ping kapalı: {offline} | HTTP sorun: {http_issues} | Kritik SSL: {ssl_issues}")
+        lines.append(f"⏱️ 24s: %{report['overall_24h'].percentage:.1f} | 7g: %{report['overall_7d'].percentage:.1f} | Genel: %{report['overall_all'].percentage:.1f}")
+        if not issue_servers:
+            lines.append("✅ Tüm hedefler normal görünüyor.")
+        else:
+            lines.append("Sorun görülen hedefler:")
+    else:
+        lines.append(f"{'✅' if not issue_servers else '⚠️'} Total {total} targets | Online: {online} | Issues: {len(issue_servers)}")
+        lines.append(f"📊 Ping down: {offline} | HTTP issues: {http_issues} | Critical SSL: {ssl_issues}")
+        lines.append(f"⏱️ 24h: {report['overall_24h'].percentage:.1f}% | 7d: {report['overall_7d'].percentage:.1f}% | Overall: {report['overall_all'].percentage:.1f}%")
+        if not issue_servers:
+            lines.append("✅ All targets look healthy.")
+        else:
+            lines.append("Targets with issues:")
+
+    for server in issue_servers:
+        lines.append(f"{_status_emoji(server['is_up'])} {server['name']} — {_issue_summary(server, lang)}")
+
     lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     return "\n".join(lines)
 
@@ -115,7 +150,7 @@ def build_uptime_message(report: dict[str, object], lang: str = "en") -> str:
 
     for server in report["servers"]:
         lines.append(
-            f"{_status_emoji(server['is_up'])} {server['name']}: 24h {_fmt_uptime(server['uptime_24h'])} | 7d {_fmt_uptime(server['uptime_7d'])} | {tr(lang, 'overall_uptime')}: {_fmt_uptime(server['uptime_all'])} | HTTP {_http_text(server, lang)}"
+            f"{_status_emoji(server['is_up'])} {server['name']}: 24h {_fmt_uptime(server['uptime_24h'])} | 7d {_fmt_uptime(server['uptime_7d'])} | {tr(lang, 'overall_uptime')}: {_fmt_uptime(server['uptime_all'])} | HTTP {_http_short(server)}"
         )
 
     lines.append("")
