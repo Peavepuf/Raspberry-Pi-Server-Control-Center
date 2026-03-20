@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
+from monitor.i18n import tr
 from monitor.reporting import (
     build_daily_summary,
     build_servers_message,
@@ -87,6 +88,7 @@ class TelegramPoller(threading.Thread):
         get_daily_report: Callable[[], dict[str, object]],
         get_weekly_report: Callable[[], dict[str, object]],
         auto_register_chats: bool,
+        get_language: Callable[[], str],
         stop_event: threading.Event,
     ) -> None:
         super().__init__(daemon=True)
@@ -96,6 +98,7 @@ class TelegramPoller(threading.Thread):
         self.get_daily_report = get_daily_report
         self.get_weekly_report = get_weekly_report
         self.auto_register_chats = auto_register_chats
+        self.get_language = get_language
         self.stop_event = stop_event
 
     def run(self) -> None:
@@ -145,22 +148,23 @@ class TelegramPoller(threading.Thread):
             return
 
         report = self.get_report()
+        lang = self.get_language()
         if text.startswith("/start"):
-            reply = "Bot activated. This chat has been registered for scheduled reports."
+            reply = tr(lang, "bot_activated")
         elif text.startswith("/help"):
             reply = "/start\n/help\n/status\n/uptime\n/servers\n/daily\n/weekly"
         elif text.startswith("/status"):
-            reply = build_status_message(report)
+            reply = build_status_message(report, lang=lang)
         elif text.startswith("/uptime"):
-            reply = build_uptime_message(report)
+            reply = build_uptime_message(report, lang=lang)
         elif text.startswith("/servers"):
-            reply = build_servers_message(report)
+            reply = build_servers_message(report, lang=lang)
         elif text.startswith("/daily"):
-            reply = build_daily_summary(self.get_daily_report())
+            reply = build_daily_summary(self.get_daily_report(), lang=lang)
         elif text.startswith("/weekly"):
-            reply = build_weekly_summary(self.get_weekly_report())
+            reply = build_weekly_summary(self.get_weekly_report(), lang=lang)
         else:
-            reply = "Unknown command. Use /help."
+            reply = tr(lang, "unknown_command")
 
         try:
             self.bot.send_message(chat_id, reply)

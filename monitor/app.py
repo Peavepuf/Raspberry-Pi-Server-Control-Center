@@ -15,6 +15,7 @@ from monitor.checker import ping_server
 from monitor.config import load_app_config, load_servers
 from monitor.database import Database
 from monitor.fan_control import TemperatureFanController
+from monitor.i18n import normalize_language, tr
 from monitor.models import CheckResult, FanSettings, ServerConfig
 from monitor.reporting import (
     build_daily_summary,
@@ -77,6 +78,8 @@ class MonitorApplication:
             self.config.telegram_bot_token,
             self.config.telegram_chat_ids,
         )
+        if self.database.get_state("ui_language") is None:
+            self.database.set_state("ui_language", "en")
 
         telegram_settings = self.database.get_telegram_settings()
         self.bot = TelegramBotClient(str(telegram_settings["token"]))
@@ -114,6 +117,7 @@ class MonitorApplication:
             get_daily_report=lambda: self.database.get_period_report(24),
             get_weekly_report=lambda: self.database.get_period_report(24 * 7),
             auto_register_chats=self.config.auto_register_chats,
+            get_language=self.get_language,
             stop_event=self.stop_event,
         )
         self.poller.start()
@@ -147,8 +151,9 @@ class MonitorApplication:
             print(f"- {chat['chat_id']}{title} - {chat['discovered_at']}")
         return 0
 
-    def run_once(self, send_notification: bool = True, title: str = "One-time server report") -> None:
+    def run_once(self, send_notification: bool = True, title: str | None = None) -> None:
         with self._task_lock:
+            lang = self.get_language()
             previous_states = self.database.get_latest_status_map()
             results = self._check_servers()
             report = self.database.get_uptime_report()
@@ -156,29 +161,31 @@ class MonitorApplication:
             if send_notification:
                 changes = self._build_state_changes(previous_states, results)
                 if changes:
-                    self._notify_all(build_state_change_message(changes))
+                    self._notify_all(build_state_change_message(changes, lang=lang))
 
                 ssl_warnings = self._collect_ssl_warnings(results)
                 if ssl_warnings:
-                    self._notify_all(build_ssl_warning_message(ssl_warnings))
+                    self._notify_all(build_ssl_warning_message(ssl_warnings, lang=lang))
 
-            message = build_hourly_summary(report, title=title)
+            message = build_hourly_summary(report, title=title or tr(lang, "one_time_server_report"), lang=lang)
             LOGGER.info("\n%s", message)
             if send_notification:
                 self._notify_all(message)
 
     def run_daily_summary(self, send_notification: bool = True) -> None:
         with self._task_lock:
+            lang = self.get_language()
             report = self.database.get_period_report(24)
-            message = build_daily_summary(report)
+            message = build_daily_summary(report, lang=lang)
             LOGGER.info("\n%s", message)
             if send_notification:
                 self._notify_all(message)
 
     def run_weekly_summary(self, send_notification: bool = True) -> None:
         with self._task_lock:
+            lang = self.get_language()
             report = self.database.get_period_report(24 * 7)
-            message = build_weekly_summary(report)
+            message = build_weekly_summary(report, lang=lang)
             LOGGER.info("\n%s", message)
             if send_notification:
                 self._notify_all(message)
@@ -189,7 +196,7 @@ class MonitorApplication:
             self._install_signal_handlers()
 
         if self.config.run_on_start:
-            self.run_once(send_notification=True, title="Startup server report")
+            self.run_once(send_notification=True, title=self._t("startup_server_report"))
 
         jobs = self._build_jobs()
         with self._jobs_lock:
@@ -235,6 +242,7 @@ class MonitorApplication:
             return 1
 
     def get_dashboard_snapshot(self) -> dict[str, object]:
+        language = self.get_language()
         report = self.database.get_uptime_report()
         fan = self.fan_controller.get_status()
         fan_settings = self.database.get_fan_settings()
@@ -257,6 +265,7 @@ class MonitorApplication:
             "telegram_settings": telegram_settings,
             "servers_config": servers,
             "jobs": jobs,
+            "language": language,
         }
 
     def list_servers(self) -> list[ServerConfig]:
@@ -266,13 +275,13 @@ class MonitorApplication:
         name = name.strip()
         address = self._normalize_address(address)
         if not name or not address:
-            return False, "Server name and address are required."
+            return False, self._t("server_name_address_required")
 
         try:
             self.database.save_server(name=name, address=address, enabled=enabled, server_id=server_id)
         except sqlite3.IntegrityError:
-            return False, "Another server with the same name or address already exists."
-        return True, "Server saved successfully."
+            return False, self._t("server_duplicate")
+        return True, self._t("server_saved")
 
     def _normalize_address(self, value: str) -> str:
         raw = value.strip()
@@ -282,7 +291,7 @@ class MonitorApplication:
 
     def delete_server(self, server_id: int) -> tuple[bool, str]:
         self.database.delete_server(server_id)
-        return True, "Server deleted successfully."
+        return True, self._t("server_deleted")
 
     def get_fan_settings(self) -> FanSettings:
         return self.database.get_fan_settings()
@@ -296,9 +305,9 @@ class MonitorApplication:
         poll_interval_seconds: int,
     ) -> tuple[bool, str]:
         if min_temp_c >= max_temp_c:
-            return False, "The 25% temperature must be lower than the 100% temperature."
+            return False, self._t("fan_temp_validation")
         if poll_interval_seconds < 2:
-            return False, "Fan polling interval must be at least 2 seconds."
+            return False, self._t("fan_interval_validation")
 
         settings = FanSettings(
             pin=pin,
@@ -310,7 +319,7 @@ class MonitorApplication:
         )
         self.database.save_fan_settings(settings)
         self.fan_controller.update_settings(settings)
-        return True, "Fan settings saved successfully."
+        return True, self._t("fan_saved")
 
     def get_telegram_settings(self) -> dict[str, object]:
         return self.database.get_telegram_settings()
@@ -322,41 +331,52 @@ class MonitorApplication:
         self.bot.update_token(clean_token)
         if clean_token and self._components_started:
             self.start_poller()
-        return True, "Telegram settings saved successfully."
+        return True, self._t("telegram_saved")
+
+    def get_language(self) -> str:
+        return normalize_language(self.database.get_state("ui_language", "en"))
+
+    def save_language(self, language: str) -> tuple[bool, str]:
+        if (language or "").strip().lower() not in {"en", "tr"}:
+            return False, self._t("language_invalid")
+        normalized = normalize_language(language)
+        self.database.set_state("ui_language", normalized)
+        return True, tr(normalized, "language_saved")
 
     def send_test_telegram_message(self) -> tuple[bool, str]:
+        lang = self.get_language()
         if not self.bot.enabled:
-            return False, "Telegram bot token is not configured."
+            return False, tr(lang, "telegram_token_missing")
 
         chat_ids = self._get_notification_chat_ids()
         if not chat_ids:
-            return False, "No Telegram chat or user ID is configured."
+            return False, tr(lang, "telegram_chat_missing")
 
         message = (
-            "✅ Telegram test message\n"
-            "Raspberry Pi Server Control Center is ready.\n"
-            f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"✅ {tr(lang, 'telegram_test_message')}\n"
+            f"{tr(lang, 'telegram_ready')}\n"
+            f"{tr(lang, 'generated_at', value=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
         )
         sent_count, errors = self._send_message_to_chats(chat_ids, message)
         if sent_count == 0:
-            return False, "Telegram test failed: " + "; ".join(errors or ["Unknown error"])
+            return False, tr(lang, "telegram_test_failed", error="; ".join(errors or [tr(lang, "unknown")]))
         if errors:
-            return True, f"Test sent to {sent_count} chat(s). Some deliveries failed: {'; '.join(errors)}"
-        return True, f"Test sent successfully to {sent_count} chat(s)."
+            return True, tr(lang, "telegram_test_partial", count=sent_count, error="; ".join(errors))
+        return True, tr(lang, "telegram_test_success", count=sent_count)
 
     def _build_jobs(self) -> list[ScheduledJob]:
         now = datetime.now()
         return [
             ScheduledJob(
                 name="hourly_check",
-                description="Hourly server connectivity check",
+                description=self._t("hourly_connectivity_check"),
                 next_run=_next_hour_boundary(now),
                 next_run_factory=_next_hour_boundary,
-                action=lambda: self.run_once(send_notification=True, title="Hourly server report"),
+                action=lambda: self.run_once(send_notification=True, title=self._t("hourly_server_report")),
             ),
             ScheduledJob(
                 name="daily_summary",
-                description="Daily summary report",
+                description=self._t("daily_summary_report"),
                 next_run=_next_daily_time(now, self.config.daily_report_hour, self.config.daily_report_minute),
                 next_run_factory=lambda current: _next_daily_time(
                     current,
@@ -367,7 +387,7 @@ class MonitorApplication:
             ),
             ScheduledJob(
                 name="weekly_summary",
-                description="Weekly summary report",
+                description=self._t("weekly_summary_report"),
                 next_run=_next_weekly_time(
                     now,
                     self.config.weekly_report_weekday,
@@ -506,6 +526,9 @@ class MonitorApplication:
             self.poller.join(timeout=2)
         if self.scheduler_thread and self.scheduler_thread.is_alive():
             self.scheduler_thread.join(timeout=2)
+
+    def _t(self, key: str, **kwargs: object) -> str:
+        return tr(self.get_language(), key, **kwargs)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
