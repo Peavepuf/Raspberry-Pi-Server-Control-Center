@@ -110,6 +110,15 @@ python main.py
 python main.py --headless
 ```
 
+### Update on Raspberry Pi
+
+```bash
+chmod +x updater.sh
+./updater.sh
+```
+
+The updater downloads the latest version from GitHub and runs the Raspberry Pi installer again while keeping your local database folder in place.
+
 ### Run a single check
 
 ```bash
@@ -183,6 +192,7 @@ data/monitor.db
 - `config/servers.json` — optional initial seed targets
 - `data/monitor.db` — local database
 - `install_pi.sh` — Raspberry Pi installation script
+- `updater.sh` — update script for Raspberry Pi
 
 ## Security
 

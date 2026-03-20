@@ -15,6 +15,8 @@ sudo mkdir -p "${TARGET_DIR}"
 sudo rsync -a --delete ./ "${TARGET_DIR}/" \
   --exclude ".git" \
   --exclude ".venv" \
+  --exclude "data" \
+  --exclude "logs" \
   --exclude "__pycache__" \
   --exclude "*.pyc"
 
