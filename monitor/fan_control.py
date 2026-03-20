@@ -49,10 +49,14 @@ class TemperatureFanController:
                 if self._pwm is not None:
                     self._pwm.ChangeDutyCycle(0)
                     self._pwm.stop()
-                GPIO.output(self._settings.pin, GPIO.LOW)
                 GPIO.cleanup(self._settings.pin)
             except Exception:
                 LOGGER.exception("GPIO cleanup failed.")
+            finally:
+                with self._lock:
+                    self._gpio_ready = False
+                    self._current_speed_percent = 0
+                self._pwm = None
 
     def update_settings(self, settings: FanSettings) -> None:
         with self._lock:
@@ -69,6 +73,7 @@ class TemperatureFanController:
                     LOGGER.exception("GPIO cleanup before reconfiguration failed.")
                 finally:
                     self._gpio_ready = False
+                    self._current_speed_percent = 0
                     self._pwm = None
             self._setup_gpio()
 
@@ -110,7 +115,9 @@ class TemperatureFanController:
             LOGGER.exception("GPIO setup failed: %s", exc)
             with self._lock:
                 self._gpio_ready = False
+                self._current_speed_percent = 0
                 self._last_error = f"GPIO setup failed: {exc}"
+            self._pwm = None
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
