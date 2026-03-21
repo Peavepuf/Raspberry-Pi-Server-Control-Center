@@ -85,6 +85,7 @@ class TelegramPoller(threading.Thread):
         bot: TelegramBotClient,
         database,
         get_report: Callable[[], dict[str, object]],
+        get_live_report: Callable[[], dict[str, object]],
         get_daily_report: Callable[[], dict[str, object]],
         get_weekly_report: Callable[[], dict[str, object]],
         auto_register_chats: bool,
@@ -95,6 +96,7 @@ class TelegramPoller(threading.Thread):
         self.bot = bot
         self.database = database
         self.get_report = get_report
+        self.get_live_report = get_live_report
         self.get_daily_report = get_daily_report
         self.get_weekly_report = get_weekly_report
         self.auto_register_chats = auto_register_chats
@@ -147,22 +149,41 @@ class TelegramPoller(threading.Thread):
         if not text.startswith("/"):
             return
 
-        report = self.get_report()
         lang = self.get_language()
+        report = self.get_report()
         if text.startswith("/start"):
             reply = tr(lang, "bot_activated")
         elif text.startswith("/help"):
-            reply = "/start\n/help\n/status\n/uptime\n/servers\n/daily\n/weekly"
+            if lang == "tr":
+                reply = (
+                    "/start - Bu sohbeti planl? bildirimler i?in kaydeder.\n"
+                    "/help - Komut listesini ve a??klamalar?n? g?sterir.\n"
+                    "/status - T?m hedefler i?in anl?k canl? durum ?zeti olu?turur.\n"
+                    "/uptime - 24 saat, 7 g?n ve genel eri?ilebilirlik oranlar?n? g?sterir.\n"
+                    "/servers - T?m hedefler i?in anl?k canl? detayl? kontrol sonucu g?nderir.\n"
+                    "/daily - Son 24 saatin ?zet raporunu g?nderir.\n"
+                    "/weekly - Son 7 g?n?n ?zet raporunu g?nderir."
+                )
+            else:
+                reply = (
+                    "/start - Register this chat for scheduled notifications.\n"
+                    "/help - Show the command list with descriptions.\n"
+                    "/status - Run a live status check summary for all targets.\n"
+                    "/uptime - Show 24h, 7d, and overall uptime percentages.\n"
+                    "/servers - Run a live detailed check for all targets.\n"
+                    "/daily - Send the summary report for the last 24 hours.\n"
+                    "/weekly - Send the summary report for the last 7 days."
+                )
         elif text.startswith("/status"):
-            reply = build_status_message(report, lang=lang)
+            reply = build_status_message(self.get_live_report(), lang=lang, include_generated_at=False)
         elif text.startswith("/uptime"):
             reply = build_uptime_message(report, lang=lang)
         elif text.startswith("/servers"):
-            reply = build_servers_message(report, lang=lang)
+            reply = build_servers_message(self.get_live_report(), lang=lang)
         elif text.startswith("/daily"):
-            reply = build_daily_summary(self.get_daily_report(), lang=lang)
+            reply = build_daily_summary(self.get_daily_report(), lang=lang, include_generated_at=False)
         elif text.startswith("/weekly"):
-            reply = build_weekly_summary(self.get_weekly_report(), lang=lang)
+            reply = build_weekly_summary(self.get_weekly_report(), lang=lang, include_generated_at=False)
         else:
             reply = tr(lang, "unknown_command")
 

@@ -114,6 +114,7 @@ class MonitorApplication:
             bot=self.bot,
             database=self.database,
             get_report=self.database.get_uptime_report,
+            get_live_report=self.get_live_report,
             get_daily_report=lambda: self.database.get_period_report(24),
             get_weekly_report=lambda: self.database.get_period_report(24 * 7),
             auto_register_chats=self.config.auto_register_chats,
@@ -161,34 +162,45 @@ class MonitorApplication:
             if send_notification:
                 changes = self._build_state_changes(previous_states, results)
                 if changes:
-                    self._notify_all(build_state_change_message(changes, lang=lang))
+                    self._notify_all(build_state_change_message(changes, lang=lang, include_generated_at=False))
 
                 ssl_warnings = self._collect_ssl_warnings(results)
                 if ssl_warnings:
-                    self._notify_all(build_ssl_warning_message(ssl_warnings, lang=lang))
+                    self._notify_all(build_ssl_warning_message(ssl_warnings, lang=lang, include_generated_at=False))
 
-            message = build_hourly_summary(report, title=title or tr(lang, "one_time_server_report"), lang=lang)
-            LOGGER.info("\n%s", message)
+            log_message = build_hourly_summary(
+                report,
+                title=title or tr(lang, "one_time_server_report"),
+                lang=lang,
+                include_generated_at=True,
+            )
+            LOGGER.info("\n%s", log_message)
             if send_notification:
-                self._notify_all(message)
+                notify_message = build_hourly_summary(
+                    report,
+                    title=title or tr(lang, "one_time_server_report"),
+                    lang=lang,
+                    include_generated_at=False,
+                )
+                self._notify_all(notify_message)
 
     def run_daily_summary(self, send_notification: bool = True) -> None:
         with self._task_lock:
             lang = self.get_language()
             report = self.database.get_period_report(24)
-            message = build_daily_summary(report, lang=lang)
-            LOGGER.info("\n%s", message)
+            log_message = build_daily_summary(report, lang=lang, include_generated_at=True)
+            LOGGER.info("\n%s", log_message)
             if send_notification:
-                self._notify_all(message)
+                self._notify_all(build_daily_summary(report, lang=lang, include_generated_at=False))
 
     def run_weekly_summary(self, send_notification: bool = True) -> None:
         with self._task_lock:
             lang = self.get_language()
             report = self.database.get_period_report(24 * 7)
-            message = build_weekly_summary(report, lang=lang)
-            LOGGER.info("\n%s", message)
+            log_message = build_weekly_summary(report, lang=lang, include_generated_at=True)
+            LOGGER.info("\n%s", log_message)
             if send_notification:
-                self._notify_all(message)
+                self._notify_all(build_weekly_summary(report, lang=lang, include_generated_at=False))
 
     def run_scheduler_loop(self, install_signal_handlers: bool = True) -> None:
         self.start_background_components()
@@ -352,17 +364,18 @@ class MonitorApplication:
         if not chat_ids:
             return False, tr(lang, "telegram_chat_missing")
 
-        message = (
-            f"✅ {tr(lang, 'telegram_test_message')}\n"
-            f"{tr(lang, 'telegram_ready')}\n"
-            f"{tr(lang, 'generated_at', value=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
-        )
+        message = f"✅ {tr(lang, 'telegram_test_message')}\n{tr(lang, 'telegram_ready')}"
         sent_count, errors = self._send_message_to_chats(chat_ids, message)
         if sent_count == 0:
             return False, tr(lang, "telegram_test_failed", error="; ".join(errors or [tr(lang, "unknown")]))
         if errors:
             return True, tr(lang, "telegram_test_partial", count=sent_count, error="; ".join(errors))
         return True, tr(lang, "telegram_test_success", count=sent_count)
+
+    def get_live_report(self) -> dict[str, object]:
+        with self._task_lock:
+            self._check_servers()
+            return self.database.get_uptime_report()
 
     def _build_jobs(self) -> list[ScheduledJob]:
         now = datetime.now()

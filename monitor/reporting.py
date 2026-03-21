@@ -100,7 +100,12 @@ def _issue_summary(server: dict[str, object], lang: str) -> str:
     return " | ".join(issues)
 
 
-def build_hourly_summary(report: dict[str, object], title: str | None = None, lang: str = "en") -> str:
+def build_hourly_summary(
+    report: dict[str, object],
+    title: str | None = None,
+    lang: str = "en",
+    include_generated_at: bool = True,
+) -> str:
     servers = list(report["servers"])
     lines = [f"{_title_emoji_from_servers(servers)} {title or tr(lang, 'hourly_report_title')}"]
 
@@ -135,12 +140,18 @@ def build_hourly_summary(report: dict[str, object], title: str | None = None, la
     for server in issue_servers:
         lines.append(f"{_status_emoji(server['is_up'])} {server['name']} — {_issue_summary(server, lang)}")
 
-    lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    if include_generated_at:
+        lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     return "\n".join(lines)
 
 
-def build_status_message(report: dict[str, object], lang: str = "en") -> str:
-    return build_hourly_summary(report, title=tr(lang, "live_status_report"), lang=lang)
+def build_status_message(report: dict[str, object], lang: str = "en", include_generated_at: bool = False) -> str:
+    return build_hourly_summary(
+        report,
+        title=tr(lang, "live_status_report"),
+        lang=lang,
+        include_generated_at=include_generated_at,
+    )
 
 
 def build_uptime_message(report: dict[str, object], lang: str = "en") -> str:
@@ -166,17 +177,16 @@ def build_servers_message(report: dict[str, object], lang: str = "en") -> str:
         lines.append(tr(lang, "no_servers_configured"))
 
     for server in report["servers"]:
-        checked_at = server["last_checked_at"] or tr(lang, "not_checked_yet")
         latency = server["latency_ms"]
         latency_text = f"{latency} ms" if latency is not None else "-"
         error_suffix = f" | {tr(lang, 'ping_error_line', value=server['error'])}" if server["error"] else ""
         lines.append(
-            f"{_status_emoji(server['is_up'])} {server['name']} ({server['address']}): {_status_text(server['is_up'], lang)} | {tr(lang, 'last_check')}: {checked_at} | {tr(lang, 'latency')}: {latency_text} | HTTP: {_http_text(server, lang)} | SSL: {_ssl_text(server, lang)}{error_suffix}"
+            f"{_status_emoji(server['is_up'])} {server['name']} ({server['address']}): {_status_text(server['is_up'], lang)} | {tr(lang, 'latency')}: {latency_text} | HTTP: {_http_text(server, lang)} | SSL: {_ssl_text(server, lang)}{error_suffix}"
         )
     return "\n".join(lines)
 
 
-def build_daily_summary(report: dict[str, object], lang: str = "en") -> str:
+def build_daily_summary(report: dict[str, object], lang: str = "en", include_generated_at: bool = True) -> str:
     lines = [f"🗓️ {tr(lang, 'daily_summary_title')}"]
     if not report["servers"]:
         lines.append(tr(lang, "no_servers_configured"))
@@ -189,11 +199,12 @@ def build_daily_summary(report: dict[str, object], lang: str = "en") -> str:
     lines.append("")
     lines.append(tr(lang, "overall_daily_uptime", value=_fmt_uptime(report["overall"])))
     lines.append(tr(lang, "daily_total_failures", value=report["total_failures"]))
-    lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    if include_generated_at:
+        lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     return "\n".join(lines)
 
 
-def build_weekly_summary(report: dict[str, object], lang: str = "en") -> str:
+def build_weekly_summary(report: dict[str, object], lang: str = "en", include_generated_at: bool = True) -> str:
     lines = [f"🗓️ {tr(lang, 'weekly_summary_title')}"]
     if not report["servers"]:
         lines.append(tr(lang, "no_servers_configured"))
@@ -206,11 +217,16 @@ def build_weekly_summary(report: dict[str, object], lang: str = "en") -> str:
     lines.append("")
     lines.append(tr(lang, "overall_weekly_uptime", value=_fmt_uptime(report["overall"])))
     lines.append(tr(lang, "weekly_total_failures", value=report["total_failures"]))
-    lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    if include_generated_at:
+        lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     return "\n".join(lines)
 
 
-def build_state_change_message(changes: list[dict[str, object]], lang: str = "en") -> str:
+def build_state_change_message(
+    changes: list[dict[str, object]],
+    lang: str = "en",
+    include_generated_at: bool = True,
+) -> str:
     if not changes:
         return ""
 
@@ -226,11 +242,16 @@ def build_state_change_message(changes: list[dict[str, object]], lang: str = "en
             if change.get("error"):
                 lines.append(f"  {tr(lang, 'http_error_text', value=change['error'])}")
 
-    lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    if include_generated_at:
+        lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     return "\n".join(lines)
 
 
-def build_ssl_warning_message(warnings: list[dict[str, object]], lang: str = "en") -> str:
+def build_ssl_warning_message(
+    warnings: list[dict[str, object]],
+    lang: str = "en",
+    include_generated_at: bool = True,
+) -> str:
     if not warnings:
         return ""
 
@@ -244,7 +265,8 @@ def build_ssl_warning_message(warnings: list[dict[str, object]], lang: str = "en
             lines.append(
                 f"🟠 {tr(lang, 'ssl_expiring_message', name=warning['name'], address=warning['address'], days_left=warning['days_left'], expires_at=warning['expires_at'])}"
             )
-    lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    if include_generated_at:
+        lines.append(tr(lang, "generated_at", value=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     return "\n".join(lines)
 
 
