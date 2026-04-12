@@ -30,6 +30,7 @@ class MonitorDashboard:
         self.fan_min_temp_var = tk.StringVar()
         self.fan_max_temp_var = tk.StringVar()
         self.fan_poll_interval_var = tk.StringVar()
+        self.fan_active_low_var = tk.BooleanVar(value=True)
         self.telegram_token_var = tk.StringVar()
         self.telegram_chat_ids_var = tk.StringVar()
         self.language_var = tk.StringVar()
@@ -218,7 +219,13 @@ class MonitorDashboard:
         ttk.Label(fan_frame, text=self._t("poll_interval")).grid(row=2, column=2, sticky=tk.W, padx=(20, 8), pady=4)
         self.fan_poll_interval_entry = ttk.Entry(fan_frame, textvariable=self.fan_poll_interval_var, width=10)
         self.fan_poll_interval_entry.grid(row=2, column=3, sticky=tk.W, pady=4)
-        ttk.Button(fan_frame, text=self._t("save_fan_settings"), command=self._save_fan_settings).grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
+        self.fan_active_low_check = ttk.Checkbutton(
+            fan_frame,
+            text=self._t("relay_active_low"),
+            variable=self.fan_active_low_var,
+        )
+        self.fan_active_low_check.grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=(4, 0))
+        ttk.Button(fan_frame, text=self._t("save_fan_settings"), command=self._save_fan_settings).grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
 
         telegram_frame = ttk.LabelFrame(self.settings_content, text=self._t("telegram_settings"), padding=10)
         telegram_frame.pack(fill=tk.X)
@@ -259,16 +266,20 @@ class MonitorDashboard:
 
         temp = fan["last_temp_c"]
         temp_text = f"{temp:.1f}°C" if isinstance(temp, (float, int)) else self._t("not_applicable")
+        temp_text = self._format_cpu_temp(temp)
         availability = self._t("gpio_ready") if fan["gpio_ready"] else self._t("gpio_unavailable")
         extra = self._t("fan_error_suffix", error=fan["last_error"]) if fan["last_error"] else ""
+        fan_state = self._t("fan_on_state") if fan["fan_on"] else self._t("fan_off_state")
+        relay_mode = self._t("relay_mode_low") if fan["active_low"] else self._t("relay_mode_high")
         self.fan_var.set(
             self._t(
                 "fan_status_line",
-                speed=fan["current_speed_percent"],
+                state=fan_state,
                 temp=temp_text,
                 pin=fan["pin"],
-                min_temp=fan["min_temp_c"],
-                max_temp=fan["max_temp_c"],
+                off_temp=fan["off_temp_c"],
+                on_temp=fan["on_temp_c"],
+                relay_mode=relay_mode,
                 availability=availability,
                 extra=extra,
             )
@@ -345,6 +356,7 @@ class MonitorDashboard:
             self.fan_min_temp_entry,
             self.fan_max_temp_entry,
             self.fan_poll_interval_entry,
+            self.fan_active_low_check,
         }:
             self._populate_fan_form(fan_settings)
 
@@ -377,6 +389,12 @@ class MonitorDashboard:
         self.fan_min_temp_var.set(str(fan_settings.min_temp_c))
         self.fan_max_temp_var.set(str(fan_settings.max_temp_c))
         self.fan_poll_interval_var.set(str(fan_settings.poll_interval_seconds))
+        self.fan_active_low_var.set(bool(fan_settings.active_low))
+
+    def _format_cpu_temp(self, temp) -> str:
+        if isinstance(temp, (float, int)):
+            return f"{temp:.1f}C"
+        return self._t("not_applicable")
 
     def _set_text(self, widget: tk.Text, value: str) -> None:
         widget.configure(state=tk.NORMAL)
@@ -467,6 +485,7 @@ class MonitorDashboard:
             min_temp = float(self.fan_min_temp_var.get().strip())
             max_temp = float(self.fan_max_temp_var.get().strip())
             poll_interval = int(self.fan_poll_interval_var.get().strip())
+            active_low = self.fan_active_low_var.get()
         except ValueError:
             messagebox.showerror(self._t("fan_settings_title"), self._t("fan_settings_numeric"))
             return
@@ -476,6 +495,7 @@ class MonitorDashboard:
             min_temp_c=min_temp,
             max_temp_c=max_temp,
             poll_interval_seconds=poll_interval,
+            active_low=active_low,
         )
         self.settings_status_var.set(message)
         if not ok:

@@ -14,7 +14,7 @@ Raspberry Pi Server Control Center is a desktop and background monitoring applic
 - SQLite-based local storage
 - Target management from the interface
 - Telegram settings management from the interface
-- PWM fan control based on CPU temperature
+- Relay-based fan control with separate start/stop thresholds
 
 ## What the Application Monitors
 
@@ -44,18 +44,24 @@ These values are stored in the database and used consistently in:
 
 ## Fan Control
 
-The fan controller uses two temperature points:
+The relay fan controller uses two temperature points:
 
-- **25% Temperature**: the fan starts at 25% speed
-- **100% Temperature**: the fan reaches 100% speed
+- **Fan Start Temperature**: the fan turns on
+- **Fan Stop Temperature**: the fan turns off
 
-Fan speed is calculated linearly between those two values. Below the 25% temperature threshold, the fan remains off.
+This creates a hysteresis window so the relay does not switch on and off continuously. For example, you can set the fan to start at `55C` and stop at `50C`.
+
+Relay mode can also be configured:
+
+- **Active LOW**: the relay turns on when the GPIO output goes LOW
+- **Active HIGH**: the relay turns on when the GPIO output goes HIGH
 
 Default values:
 
 - GPIO pin: `23`
-- 25% temperature: `45°C`
-- 100% temperature: `65°C`
+- fan stop temperature: `50C`
+- fan start temperature: `55C`
+- relay mode: `active LOW`
 
 ## Graphical Interface
 
@@ -75,7 +81,7 @@ The interface includes:
 - 24-hour, 7-day, and overall uptime
 - error details
 - CPU temperature
-- current fan speed percentage
+- current fan on/off state
 - upcoming scheduled jobs
 - settings page
 
@@ -87,8 +93,9 @@ The settings page allows you to manage:
 - tracked target address / URL / IP
 - target enabled state
 - GPIO pin
-- 25% fan temperature
-- 100% fan temperature
+- fan stop temperature
+- fan start temperature
+- relay active-low mode
 - fan polling interval
 - Telegram bot token
 - Telegram chat / user ID list
@@ -109,15 +116,6 @@ python main.py
 ```bash
 python main.py --headless
 ```
-
-### Update on Raspberry Pi
-
-```bash
-chmod +x updater.sh
-./updater.sh
-```
-
-The updater downloads the latest version from GitHub and runs the Raspberry Pi installer again while keeping your local database folder in place.
 
 ### Run a single check
 
@@ -153,19 +151,65 @@ python main.py --run-once --no-notify
 - `/daily`
 - `/weekly`
 
-## Raspberry Pi Installation
+## Fresh Raspberry Pi Installation
+
+For a clean install on a new Raspberry Pi:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/Peavepuf/Raspberry-Pi-Server-Control-Center.git
+cd Raspberry-Pi-Server-Control-Center
 chmod +x install_pi.sh
-./install_pi.sh
+sudo ./install_pi.sh
 ```
 
-The installer:
+After installation:
+
+- the GUI starts automatically when the desktop session opens
+- the application is installed under `/opt/raspberry-pi-server-control-center`
+- local data is kept in `/opt/raspberry-pi-server-control-center/data`
+
+Manual start commands:
+
+```bash
+/opt/raspberry-pi-server-control-center/start_dashboard.sh
+```
+
+```bash
+cd /opt/raspberry-pi-server-control-center
+.venv/bin/python main.py --headless
+```
+
+The install script:
 
 - installs required packages
 - copies the application to the target directory
 - creates a Python virtual environment
 - configures GUI auto-start
+
+## Update Existing Raspberry Pi Installation
+
+If you already have a local copy of the project:
+
+```bash
+cd Raspberry-Pi-Server-Control-Center
+chmod +x updater.sh
+./updater.sh
+```
+
+If you only want a quick update flow from scratch again:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/Peavepuf/Raspberry-Pi-Server-Control-Center.git
+cd Raspberry-Pi-Server-Control-Center
+chmod +x updater.sh
+./updater.sh
+```
+
+The updater downloads the latest version from GitHub and runs the Raspberry Pi installer again while keeping your local database folder in place.
 
 ## Headless Service
 
@@ -187,12 +231,12 @@ data/monitor.db
 
 ## Project Structure
 
-- `main.py` — application entry point
-- `monitor/` — application modules
-- `config/servers.json` — optional initial seed targets
-- `data/monitor.db` — local database
-- `install_pi.sh` — Raspberry Pi installation script
-- `updater.sh` — update script for Raspberry Pi
+- `main.py` - application entry point
+- `monitor/` - application modules
+- `config/servers.json` - optional initial seed targets
+- `data/monitor.db` - local database
+- `install_pi.sh` - Raspberry Pi installation script
+- `updater.sh` - update script for Raspberry Pi
 
 ## Security
 

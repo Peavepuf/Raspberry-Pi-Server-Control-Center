@@ -47,5 +47,6 @@ class FanSettings:
     min_temp_c: float
     max_temp_c: float
     poll_interval_seconds: int
-    min_speed_percent: int = 25
+    active_low: bool = True
+    min_speed_percent: int = 0
     max_speed_percent: int = 100

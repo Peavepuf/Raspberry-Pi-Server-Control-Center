@@ -9,7 +9,6 @@ from monitor.models import FanSettings
 LOGGER = logging.getLogger(__name__)
 
 CPU_TEMP_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
-PWM_FREQUENCY_HZ = 250
 
 try:
     import RPi.GPIO as GPIO
@@ -22,7 +21,6 @@ class TemperatureFanController:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._pwm = None
 
         self._settings = settings
         self._gpio_ready = False
@@ -46,36 +44,48 @@ class TemperatureFanController:
 
         if GPIO is not None and self._gpio_ready:
             try:
-                if self._pwm is not None:
-                    self._pwm.ChangeDutyCycle(0)
-                    self._pwm.stop()
-                GPIO.cleanup(self._settings.pin)
+                with self._lock:
+                    settings = self._settings
+                self._write_output(settings, turn_on=False)
+                GPIO.cleanup(settings.pin)
             except Exception:
                 LOGGER.exception("GPIO cleanup failed.")
             finally:
                 with self._lock:
                     self._gpio_ready = False
                     self._current_speed_percent = 0
-                self._pwm = None
 
     def update_settings(self, settings: FanSettings) -> None:
         with self._lock:
-            pin_changed = settings.pin != self._settings.pin
+            previous_settings = self._settings
+            pin_changed = settings.pin != previous_settings.pin
+            logic_changed = settings.active_low != previous_settings.active_low
+            current_speed_percent = self._current_speed_percent
             self._settings = settings
 
         if pin_changed:
             if GPIO is not None and self._gpio_ready:
                 try:
-                    if self._pwm is not None:
-                        self._pwm.stop()
-                    GPIO.cleanup()
+                    self._write_output(previous_settings, turn_on=False)
+                    GPIO.cleanup(previous_settings.pin)
                 except Exception:
                     LOGGER.exception("GPIO cleanup before reconfiguration failed.")
                 finally:
-                    self._gpio_ready = False
-                    self._current_speed_percent = 0
-                    self._pwm = None
+                    with self._lock:
+                        self._gpio_ready = False
+                        self._current_speed_percent = 0
             self._setup_gpio()
+            return
+
+        if logic_changed and GPIO is not None and self._gpio_ready:
+            try:
+                self._write_output(settings, turn_on=current_speed_percent > 0)
+                with self._lock:
+                    self._last_error = None
+            except Exception as exc:
+                LOGGER.exception("Failed to update relay logic: %s", exc)
+                with self._lock:
+                    self._last_error = f"Failed to update relay logic: {exc}"
 
     def get_status(self) -> dict[str, object]:
         with self._lock:
@@ -87,6 +97,9 @@ class TemperatureFanController:
                 "pin": settings.pin,
                 "min_temp_c": settings.min_temp_c,
                 "max_temp_c": settings.max_temp_c,
+                "off_temp_c": settings.min_temp_c,
+                "on_temp_c": settings.max_temp_c,
+                "active_low": settings.active_low,
                 "min_speed_percent": settings.min_speed_percent,
                 "max_speed_percent": settings.max_speed_percent,
                 "last_temp_c": self._last_temp_c,
@@ -103,11 +116,12 @@ class TemperatureFanController:
             return
 
         try:
+            with self._lock:
+                settings = self._settings
+
             GPIO.setwarnings(False)
             GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self._settings.pin, GPIO.OUT, initial=GPIO.LOW)
-            self._pwm = GPIO.PWM(self._settings.pin, PWM_FREQUENCY_HZ)
-            self._pwm.start(0)
+            GPIO.setup(settings.pin, GPIO.OUT, initial=self._relay_output_level(settings, turn_on=False))
             with self._lock:
                 self._gpio_ready = True
                 self._last_error = None
@@ -117,7 +131,6 @@ class TemperatureFanController:
                 self._gpio_ready = False
                 self._current_speed_percent = 0
                 self._last_error = f"GPIO setup failed: {exc}"
-            self._pwm = None
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -147,33 +160,42 @@ class TemperatureFanController:
     def _apply_temperature(self, temp_c: float) -> None:
         with self._lock:
             settings = self._settings
+            current_speed_percent = self._current_speed_percent
 
-        desired_speed = self._calculate_speed(temp_c, settings)
-        if desired_speed == self._current_speed_percent:
+        desired_speed = self._calculate_speed(temp_c, settings, currently_on=current_speed_percent > 0)
+        if desired_speed == current_speed_percent:
             return
 
-        if GPIO is None or not self._gpio_ready or self._pwm is None:
+        if GPIO is None or not self._gpio_ready:
             with self._lock:
                 self._current_speed_percent = desired_speed
             return
 
         try:
-            self._pwm.ChangeDutyCycle(desired_speed)
+            self._write_output(settings, turn_on=desired_speed > 0)
             with self._lock:
                 self._current_speed_percent = desired_speed
                 self._last_error = None
         except Exception as exc:
-            LOGGER.exception("Failed to update fan PWM: %s", exc)
+            LOGGER.exception("Failed to update relay output: %s", exc)
             with self._lock:
-                self._last_error = f"Failed to update fan PWM: {exc}"
+                self._last_error = f"Failed to update relay output: {exc}"
 
-    def _calculate_speed(self, temp_c: float, settings: FanSettings) -> int:
-        if temp_c < settings.min_temp_c:
+    def _calculate_speed(self, temp_c: float, settings: FanSettings, *, currently_on: bool) -> int:
+        if temp_c <= settings.min_temp_c:
             return 0
         if temp_c >= settings.max_temp_c:
-            return settings.max_speed_percent
+            return 100
+        return 100 if currently_on else 0
 
-        span = max(settings.max_temp_c - settings.min_temp_c, 0.1)
-        ratio = (temp_c - settings.min_temp_c) / span
-        speed = settings.min_speed_percent + ratio * (settings.max_speed_percent - settings.min_speed_percent)
-        return max(settings.min_speed_percent, min(settings.max_speed_percent, int(round(speed))))
+    def _write_output(self, settings: FanSettings, *, turn_on: bool) -> None:
+        if GPIO is None:
+            return
+        GPIO.output(settings.pin, self._relay_output_level(settings, turn_on=turn_on))
+
+    def _relay_output_level(self, settings: FanSettings, *, turn_on: bool) -> int:
+        if GPIO is None:
+            return 0
+        if turn_on:
+            return GPIO.LOW if settings.active_low else GPIO.HIGH
+        return GPIO.HIGH if settings.active_low else GPIO.LOW

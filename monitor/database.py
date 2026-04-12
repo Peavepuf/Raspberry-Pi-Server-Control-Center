@@ -73,6 +73,7 @@ class Database:
                     min_temp_c REAL NOT NULL,
                     max_temp_c REAL NOT NULL,
                     poll_interval_seconds INTEGER NOT NULL,
+                    active_low INTEGER NOT NULL DEFAULT 1,
                     min_speed_percent INTEGER NOT NULL,
                     max_speed_percent INTEGER NOT NULL,
                     updated_at TEXT NOT NULL
@@ -81,6 +82,7 @@ class Database:
             )
             self._ensure_server_timestamps()
             self._ensure_check_columns()
+            self._ensure_fan_columns()
 
     def _ensure_server_timestamps(self) -> None:
         columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(servers)").fetchall()}
@@ -106,6 +108,12 @@ class Database:
         for column_name, column_type in required_columns.items():
             if column_name not in columns:
                 self._connection.execute(f"ALTER TABLE checks ADD COLUMN {column_name} {column_type}")
+
+    def _ensure_fan_columns(self) -> None:
+        columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(fan_settings)").fetchall()}
+        if "active_low" not in columns:
+            self._connection.execute("ALTER TABLE fan_settings ADD COLUMN active_low INTEGER NOT NULL DEFAULT 1")
+            self._connection.execute("UPDATE fan_settings SET active_low = COALESCE(active_low, 1)")
 
     def seed_servers_if_empty(self, servers: list[ServerConfig]) -> None:
         with self._lock:
@@ -202,14 +210,15 @@ class Database:
                 """
                 INSERT INTO fan_settings (
                     singleton_id, pin, min_temp_c, max_temp_c, poll_interval_seconds,
-                    min_speed_percent, max_speed_percent, updated_at
+                    active_low, min_speed_percent, max_speed_percent, updated_at
                 )
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(singleton_id) DO UPDATE SET
                     pin = excluded.pin,
                     min_temp_c = excluded.min_temp_c,
                     max_temp_c = excluded.max_temp_c,
                     poll_interval_seconds = excluded.poll_interval_seconds,
+                    active_low = excluded.active_low,
                     min_speed_percent = excluded.min_speed_percent,
                     max_speed_percent = excluded.max_speed_percent,
                     updated_at = excluded.updated_at
@@ -219,6 +228,7 @@ class Database:
                     settings.min_temp_c,
                     settings.max_temp_c,
                     settings.poll_interval_seconds,
+                    int(settings.active_low),
                     settings.min_speed_percent,
                     settings.max_speed_percent,
                     datetime_to_str(utc_now()),
@@ -229,7 +239,7 @@ class Database:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT pin, min_temp_c, max_temp_c, poll_interval_seconds, min_speed_percent, max_speed_percent
+                SELECT pin, min_temp_c, max_temp_c, poll_interval_seconds, active_low, min_speed_percent, max_speed_percent
                 FROM fan_settings
                 WHERE singleton_id = 1
                 """
@@ -241,6 +251,7 @@ class Database:
             min_temp_c=float(row["min_temp_c"]),
             max_temp_c=float(row["max_temp_c"]),
             poll_interval_seconds=int(row["poll_interval_seconds"]),
+            active_low=bool(row["active_low"]),
             min_speed_percent=int(row["min_speed_percent"]),
             max_speed_percent=int(row["max_speed_percent"]),
         )

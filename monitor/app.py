@@ -315,6 +315,7 @@ class MonitorApplication:
         min_temp_c: float,
         max_temp_c: float,
         poll_interval_seconds: int,
+        active_low: bool,
     ) -> tuple[bool, str]:
         if min_temp_c >= max_temp_c:
             return False, self._t("fan_temp_validation")
@@ -326,7 +327,8 @@ class MonitorApplication:
             min_temp_c=min_temp_c,
             max_temp_c=max_temp_c,
             poll_interval_seconds=poll_interval_seconds,
-            min_speed_percent=25,
+            active_low=active_low,
+            min_speed_percent=0,
             max_speed_percent=100,
         )
         self.database.save_fan_settings(settings)
